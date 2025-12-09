@@ -9,7 +9,6 @@
 * SPDX-License-Identifier: MIT
 *******************************************************************************/
 using BaSyx.Models.AdminShell;
-using BaSyx.Models.Extensions.JsonConverters;
 using BaSyx.Utils.Extensions;
 using Microsoft.Extensions.Logging;
 using System;
@@ -35,51 +34,78 @@ namespace BaSyx.Models.Extensions
 
         public override ISubmodelElement Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
         {
-            Utf8JsonReader jsonReader = reader;
+            string idShort = null;
+            string modelType = null;
+            string currentProperty = null;
 
-            if (jsonReader.TokenType != JsonTokenType.StartObject)
-                throw new JsonException("Json does not start with {");
-
-            string idShort = null, modelType = null;
-            while (jsonReader.Read())
+            JsonElement? elementForLog = null;
+            try
             {
-                if (jsonReader.TokenType == JsonTokenType.EndObject)
-                    break;
+                var readerForLog = reader;
+                elementForLog = JsonDocument.ParseValue(ref readerForLog).RootElement.Clone();
+            }
+            catch
+            {
+                // ignore logging snapshot errors
+            }
 
-                if (jsonReader.TokenType != JsonTokenType.PropertyName)
-                    continue;
-                string propertyName = jsonReader.GetString();
-                jsonReader.Read();
-                switch (propertyName)
+            try
+            {
+                Utf8JsonReader jsonReader = reader;
+
+                if (jsonReader.TokenType != JsonTokenType.StartObject)
+                    throw new JsonException("Json does not start with {");
+
+                while (jsonReader.Read())
                 {
-                    case "idShort":
-                        idShort = jsonReader.GetString();
+                    if (jsonReader.TokenType == JsonTokenType.EndObject)
                         break;
-                    case "modelType":
-                        modelType = jsonReader.GetString();
-                        break;
-                    default:
-                        jsonReader.Skip();
+
+                    if (jsonReader.TokenType != JsonTokenType.PropertyName)
+                        continue;
+                    string propertyName = jsonReader.GetString();
+                    jsonReader.Read();
+                    switch (propertyName)
+                    {
+                        case "idShort":
+                            idShort = jsonReader.GetString();
+                            break;
+                        case "modelType":
+                            modelType = jsonReader.GetString();
+                            break;
+                        default:
+                            jsonReader.Skip();
+                            break;
+                    }
+                    if (!string.IsNullOrEmpty(idShort) && !string.IsNullOrEmpty(modelType))
                         break;
                 }
-                if (!string.IsNullOrEmpty(idShort) && !string.IsNullOrEmpty(modelType))
-                    break;
-            }
-            if (modelType == null)
-                throw new JsonException("ModelType is null");
+                if (modelType == null)
+                {
+                    var payload = elementForLog?.GetRawText() ?? "<unavailable>";
+                    logger.LogError("Missing mandatory modelType for submodel element with idShort '{IdShort}'. Payload: {Payload}", idShort ?? "<null>", payload);
+                    throw new JsonException($"modelType is mandatory for submodel element '{idShort ?? "<missing>"}'");
+                }
 
-            SubmodelElement submodelElement = SubmodelElementFactory.CreateSubmodelElement(idShort, modelType, null);
-            string valueType = null;
-            while (reader.Read())
-            {
-                if (reader.TokenType == JsonTokenType.EndObject)
-                    return submodelElement;
+                SubmodelElement submodelElement = SubmodelElementFactory.CreateSubmodelElement(idShort, modelType, null);
+                if (submodelElement is SubmodelElementCollection smcInit && smcInit.Value == null)
+                {
+                    smcInit.Value = new SubmodelElementCollectionValue();
+                }
+                if (submodelElement == null)
+                    throw new JsonException($"Unsupported modelType '{modelType}' for element '{idShort}'");
+                string valueType = null;
+                while (reader.Read())
+                {
+                    if (reader.TokenType == JsonTokenType.EndObject)
+                        return submodelElement;
 
-                if (reader.TokenType != JsonTokenType.PropertyName)
-                    continue;
+                    if (reader.TokenType != JsonTokenType.PropertyName)
+                        continue;
 
-                string propertyName = reader.GetString();
-                reader.Read();
+                    string propertyName = reader.GetString();
+                    currentProperty = propertyName;
+                    reader.Read();
                 switch (propertyName)
                 {
                     case "idShort":
@@ -335,30 +361,41 @@ namespace BaSyx.Models.Extensions
                         }
                         else if (submodelElement is SubmodelElementCollection smc)
                         {
-                            JsonTokenType endToken;
-                            if (reader.TokenType == JsonTokenType.StartObject)
-                                endToken = JsonTokenType.EndObject;
-                            else if (reader.TokenType == JsonTokenType.StartArray)
-                                endToken = JsonTokenType.EndArray;
-                            else
-                                continue;
+                            // Ensure collection value container exists to avoid null refs when elements are missing modelType
+                            if (smc.Value == null || smc.Value.Value == null)
+                                smc.Value = new SubmodelElementCollectionValue();
 
-                            while (reader.Read() && reader.TokenType != endToken)
+                            try
                             {
-                                if (endToken == JsonTokenType.EndArray)
-                                {
-                                    ISubmodelElement sme = Read(ref reader, typeof(ISubmodelElement), options);
-                                    smc.Value.Value.Add(sme);
-                                }
-                                else if (endToken == JsonTokenType.EndObject)
-                                {
-                                    string smeIdShort = reader.GetString();
-                                    reader.Read();
-                                    ISubmodelElement sme = GetProperty(reader, smeIdShort);
-                                    smc.Value.Value.Add(sme);
-                                }
+                                JsonTokenType endToken;
+                                if (reader.TokenType == JsonTokenType.StartObject)
+                                    endToken = JsonTokenType.EndObject;
+                                else if (reader.TokenType == JsonTokenType.StartArray)
+                                    endToken = JsonTokenType.EndArray;
                                 else
                                     continue;
+
+                                while (reader.Read() && reader.TokenType != endToken)
+                                {
+                                    if (endToken == JsonTokenType.EndArray)
+                                    {
+                                        ISubmodelElement sme = Read(ref reader, typeof(ISubmodelElement), options);
+                                        smc.Value.Value.Add(sme);
+                                    }
+                                    else if (endToken == JsonTokenType.EndObject)
+                                    {
+                                        string smeIdShort = reader.GetString();
+                                        reader.Read();
+                                        ISubmodelElement sme = GetProperty(reader, smeIdShort);
+                                        smc.Value.Value.Add(sme);
+                                    }
+                                    else
+                                        continue;
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                throw new JsonException($"Failed to read SubmodelElementCollection '{submodelElement.IdShort}'", ex);
                             }
                         }
                         else if (submodelElement is SubmodelElementList sml)
@@ -410,6 +447,11 @@ namespace BaSyx.Models.Extensions
             }
 
             return submodelElement;
+            }
+            catch (Exception ex)
+            {
+                throw new JsonException($"Failed to deserialize submodel element '{idShort ?? "<unknown>"}' of type '{modelType ?? "<unknown>"}' at property '{currentProperty ?? "<unknown>"}'", ex);
+            }
         }
 
         public override void Write(Utf8JsonWriter writer, ISubmodelElement value, JsonSerializerOptions options)
@@ -479,9 +521,7 @@ namespace BaSyx.Models.Extensions
         {
             bool valueSerialized = false;
 
-            if (!string.IsNullOrEmpty(value.IdShort))
-                writer.WriteString("idShort", value.IdShort);
-
+            writer.WriteString("idShort", value.IdShort);
             writer.WriteString("kind", value.Kind.ToString());
             writer.WriteString("modelType", value.ModelType.ToString());
 
@@ -515,16 +555,7 @@ namespace BaSyx.Models.Extensions
             if (value.Qualifiers?.Count() > 0)
             {
                 writer.WritePropertyName("qualifiers");
-                var qualifierConverter = new QualifiersConverter();
-                writer.WriteStartArray();
-                foreach (var iQualifier in value.Qualifiers)
-                {
-                    writer.WriteStartObject();
-                    var qualifier = iQualifier as Qualifier;
-                    qualifierConverter.Write(writer, qualifier, options);
-                    writer.WriteEndObject();
-                }
-                writer.WriteEndArray();
+                JsonSerializer.Serialize(writer, value.Qualifiers, options);
             }
 
             switch (value.ModelType.Type)
@@ -537,7 +568,7 @@ namespace BaSyx.Models.Extensions
                         JsonSerializer.Serialize(writer, property.ValueId, options);
                     }
                     if (property.ValueType != null)
-                        writer.WriteString("valueType", $"xs:{property.ValueType.ToString()}");
+                        writer.WriteString("valueType", property.ValueType.ToString());
                     break;
                 case ModelTypes.BasicEventElement:
                     var bee = (BasicEventElement)value;

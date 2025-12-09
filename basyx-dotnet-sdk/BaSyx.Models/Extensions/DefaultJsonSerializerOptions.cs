@@ -51,6 +51,8 @@ namespace BaSyx.Models.Extensions
             _options.Converters.Add(new ValueScopeConverter());
             _options.Converters.Add(new IdentifierConverter());
             _options.Converters.Add(new ElementContainerConverter());
+            _options.Converters.Add(new ReferenceJsonConverter());
+            _options.Converters.Add(new OperationVariableSetJsonConverter());
             _options.TypeInfoResolver = new DefaultJsonTypeInfoResolver
             {
                 Modifiers = { DefaultValueModifier }

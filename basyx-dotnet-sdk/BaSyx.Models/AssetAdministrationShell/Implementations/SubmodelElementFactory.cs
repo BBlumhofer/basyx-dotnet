@@ -28,6 +28,8 @@ namespace BaSyx.Models.AdminShell
                     return new RelationshipElement(idShort);
                 case ModelTypes.AnnotatedRelationshipElement:
                     return new AnnotatedRelationshipElement(idShort); 
+                case ModelTypes.Capability:
+                    return new Capability(idShort);
                 case ModelTypes.Property:
                     return new Property(idShort, valueType);
                 case ModelTypes.File:

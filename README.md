@@ -2,7 +2,7 @@
 
 [![Build and push Docker image](https://github.com/fluid40/basyx-dotnet/actions/workflows/aasx-sm-server-docker-image.yml/badge.svg)](https://github.com/fluid40/basyx-dotnet/actions/workflows/aasx-sm-server-docker-image.yml)
 
-This is the the one and only repository to start workign with the BaSyx .NET SDK.
+This is forked from Fluid40 Dotnet SDK
 
 It implements the offical AAS Part 1: Metamodel v3 as well as the Part 2: API v1
 
